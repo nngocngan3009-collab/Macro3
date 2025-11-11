@@ -106,7 +106,7 @@ def normalize_indicator_id(raw_id: str) -> Optional[str]:
 def wb_search_indicators(keyword: str, top: int = 50) -> pd.DataFrame:
     search_term = (keyword or "").strip()
     if not search_term:
-        return pd.DataFrame(columns=["id", "raw_id", "name", "source"])
+        return pd.DataFrame(columns=["id", "raw_id", "name", "source", "score"])
     limit = max(1, min(int(top or 1), 500))
     payload = {
         "count": True,
@@ -123,16 +123,26 @@ def wb_search_indicators(keyword: str, top: int = 50) -> pd.DataFrame:
         normalized = normalize_indicator_id(raw_id)
         if not normalized:
             continue
+        score = item.get("@search.score", 0.0)
+        try:
+            score_val = float(score)
+        except (TypeError, ValueError):
+            score_val = 0.0
         results.append({
             "id": normalized,
             "raw_id": raw_id,
             "name": (series_desc.get("name") or "").strip() or normalized,
             "source": (series_desc.get("database_id") or "").strip() or "N/A",
+            "score": score_val,
         })
     df = pd.DataFrame(results)
     if df.empty:
         return df
-    return df.drop_duplicates(subset=["id"]).sort_values("name").reset_index(drop=True)
+    return (
+        df.drop_duplicates(subset=["id"])
+          .sort_values("score", ascending=False)
+          .reset_index(drop=True)
+    )
 
 # =========================
 # Fetch series
@@ -231,6 +241,7 @@ with st.sidebar:
                 df_ind = wb_search_indicators(kw.strip(), top=int(top_n))
                 st.session_state["ind_search_df"] = df_ind
                 st.session_state["selected_indicator_ids"] = []
+                st.session_state["select_all_indicator_results"] = False
 
     # Khoảng năm + xử lý NA
     y_from, y_to = st.slider("Khoảng năm", 1995, 2025, DEFAULT_DATE_RANGE)
@@ -256,6 +267,12 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(TAB_TITLES)
 ind_df = st.session_state.get("ind_search_df", pd.DataFrame())
 id_to_name = {row["id"]: row["name"] for _, row in (ind_df if not ind_df.empty else pd.DataFrame()).iterrows()}
 selected_indicator_ids = st.session_state.get("selected_indicator_ids", [])
+select_all_requested = st.session_state.get("select_all_indicator_results", False)
+if select_all_requested and not ind_df.empty:
+    all_ids = ind_df["id"].dropna().tolist()
+    if set(selected_indicator_ids) != set(all_ids):
+        selected_indicator_ids = all_ids
+        st.session_state["selected_indicator_ids"] = selected_indicator_ids
 
 with tab1:
     st.subheader("Chọn chỉ số từ kết quả tìm kiếm")
@@ -263,21 +280,32 @@ with tab1:
         st.info("Hãy dùng thanh bên trái để *Tìm indicator*.")
     else:
         selected_set = set(selected_indicator_ids)
-        display_df = ind_df.set_index("id")[["name", "source"]].rename(columns={"name": "Tên indicator", "source": "Source"})
-        display_df.insert(0, "selected", display_df.index.isin(selected_set))
+        if "score" in ind_df.columns:
+            sortable_df = ind_df.sort_values("score", ascending=False, na_position="last").copy()
+        else:
+            sortable_df = ind_df.copy()
+        display_df = (
+            sortable_df
+            .set_index("id")[["name", "source"]]
+            .rename(columns={"name": "Tên indicator", "source": "Source"})
+            .copy()
+        )
+        checkbox_col = "Chọn"
+        display_df.insert(0, checkbox_col, display_df.index.isin(selected_set))
         edited_df = st.data_editor(
             display_df,
             hide_index=True,
             num_rows="fixed",
             use_container_width=True,
             column_config={
-                "selected": st.column_config.CheckboxColumn(label="Chọn", default=False),
+                checkbox_col: st.column_config.CheckboxColumn(label="Chọn", default=False),
                 "Tên indicator": st.column_config.TextColumn("Tên indicator"),
                 "Source": st.column_config.TextColumn("Source"),
             },
         )
-        selected_indicator_ids = edited_df.index[edited_df["selected"]].tolist()
+        selected_indicator_ids = edited_df.index[edited_df[checkbox_col]].tolist()
         st.session_state["selected_indicator_ids"] = selected_indicator_ids
+        st.checkbox("Chọn tất cả các chỉ tiêu tìm thấy", key="select_all_indicator_results")
 
     if load_clicked:
         if not selected_indicator_ids:
