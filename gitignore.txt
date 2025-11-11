@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Streamlit secrets (do NOT commit real secrets)
+.streamlit/secrets.toml
+*.env
+.env*
+
+# OS
+.DS_Store
+Thumbs.db
